@@ -1,0 +1,21 @@
+# Copilot Instructions
+
+- **App shape:** Express server in `server.js` wires routers from `routes/*.js` to controllers; MongoDB via Mongoose models in `models/`. Redis (`config/redis.js`) is used for chat/webhook state and deduplication.
+- **Run locally:** `npm install`, then `npm run dev` (nodemon) or `npm start`. No automated tests defined.
+- **Env requirements:** Beyond `env.example`, set `REDIS_URL`, `CONVONITE_API_KEY`, `CONVONITE_CHANNEL_ID`, `PYTHON_MCQ_API_URL`, S3 creds, `JWT_SECRET`, Razorpay keys, and optional ChatZeal OTP configs.
+- **Auth pattern:** `middleware/authMiddleware.protect` expects `Authorization: Bearer <JWT>` and populates `req.user` (use `userId`, not Mongo `_id`). `requireAdmin` checks `User.isAdmin`.
+- **Validation:** `middleware/validate` pairs each route with zod schemas in `zodSchemas/*.js`; keep new endpoints consistent with that pattern.
+- **File storage:** Uploads use `middleware/fileUpload.handleFileUpload` (multer-s3) saving to S3 with private ACL, 10MB limit, and broad MIME allowlist. Controller `controllers/fileController.js` persists metadata in Mongo and builds signed URLs for access.
+- **MCQ generation (API):** `controllers/mcqGenerateController.generateMCQCore` validates input (`utils/validators`), enforces premium chapters (`config/premiumChapters.js`), checks quotas via `services/limitService`, calls Python service through `services/mcqService.generateMCQsFromPython`, and stores full Q/A data with `MCQGeneration`.
+- **MCQ evaluation:** Answers flow through `services/mcqService.submitMCQAnswer`, which prevents duplicate submissions, fetches canonical answers from Mongo, updates `MCQEvaluation`/`MCQProgress`, and increments limits.
+- **WhatsApp/Convonite flow:** `controllers/webhook.controller.js` handles `/api/data/webhook`. It normalizes sender IDs, dedupes by `msg.message_id` in Redis, and guides users through MCQ selection steps stored under `whatsapp:${from}`. Once MCQs are generated, it keeps run state in `mcq:whatsapp:${from}` and evaluates replies.
+- **Convonite messaging:** `services/convonite.service.js` sends interactive `selection_request` payloads. `sendTextMessage(to, caption, buttons?, footer?)` builds the request; `sendSelectionRequest` wraps it. Button lists can be strings or `{text,id}` objects and default to four attempt-status buttons.
+- **Catalog lookups:** Subject/chapter/unit options come from the external data service in `services/mcq.service.js` (HTTP calls to the 31.97.228.184 host). Options are normalized and presented via the Convonite buttons.
+- **Sessions and helpers:** `services/session.service.js` provides thin Redis helpers. Option picking uses `helpers/option.helper.pickOption` (supports numeric indices and lowercased matches); phone normalization and email validation live in `helpers/normalize.helper.js` and `helpers/validator.helper.js`.
+- **Limits config:** Subscription limits are driven by `config/mcqConfig.js` (`free` vs `pro`); premium chapter gating is in `config/premiumChapters.js`.
+- **Payments:** Razorpay integration resides in `controllers/paymentController.js` (signature verification, order creation). Keep credentials in env and reuse existing helpers if extending.
+- **Routing conventions:** Routes generally protect with auth, validate input, then hit controller logic. Admin-only endpoints live under `/api/admin/*` and use `requireAdmin`.
+- **Data keys:** Most domain records use `userId`/`sessionId`/`fileId`/`mcqId` UUIDs rather than Mongo `_id`; preserve those when creating or querying documents.
+- **Logging:** The code logs external calls and errors verbosely (Convonite, S3, Python API). Match this style when adding new integrations.
+- **Error handling:** Controllers prefer structured `res.status(...).json({ message/error })`; file upload middleware maps multer errors to user-friendly responses.
+- **When adding features:** Honor Redis-backed session lifecycles (clear on completion/cancel), enforce MCQ limits before calling the Python API, and reuse `sendSelectionRequest` for chat prompts to keep UI consistent.
